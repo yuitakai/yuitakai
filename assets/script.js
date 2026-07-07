@@ -183,15 +183,180 @@ const revealObserver = new IntersectionObserver((entries) => {
 
 document.querySelectorAll(".reveal").forEach((el) => revealObserver.observe(el));
 
-function createRipple(event) {
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+// -----------------------------------------------------------------------------
+// 3D-like water surface interaction
+// -----------------------------------------------------------------------------
+// This canvas is a transparent optical layer above the page.
+// On each click, it draws perspective-compressed wave rings with separate
+// highlight and shadow strokes. The moving light/shadow passes over the text,
+// so the page feels as if it is viewed through a shallow water surface.
 
-  const ripple = document.createElement("span");
-  ripple.className = "ripple";
-  ripple.style.left = `${event.clientX}px`;
-  ripple.style.top = `${event.clientY}px`;
-  document.body.appendChild(ripple);
-  window.setTimeout(() => ripple.remove(), 920);
+const waterCanvas = document.getElementById("waterSurface");
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+if (waterCanvas && !reduceMotion.matches) {
+  const ctx = waterCanvas.getContext("2d", { alpha: true });
+  const ripples = [];
+  let dpr = 1;
+  let width = 0;
+  let height = 0;
+  let animationId = null;
+  let quietFrames = 0;
+
+  function resizeWaterCanvas() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+
+    waterCanvas.width = Math.round(width * dpr);
+    waterCanvas.height = Math.round(height * dpr);
+    waterCanvas.style.width = `${width}px`;
+    waterCanvas.style.height = `${height}px`;
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function addWaterRipple(x, y, strength = 1) {
+    const now = performance.now();
+    ripples.push({
+      x,
+      y,
+      start: now,
+      strength,
+      seed: Math.random() * Math.PI * 2,
+    });
+
+    while (ripples.length > 10) ripples.shift();
+    waterCanvas.classList.add("is-waving");
+    quietFrames = 0;
+
+    if (!animationId) {
+      animationId = requestAnimationFrame(drawWater);
+    }
+  }
+
+  function drawEllipseStroke(x, y, radius, flatten, alpha, lineWidth, phase) {
+    if (radius <= 0 || alpha <= 0) return;
+
+    const wobble = 1 + 0.018 * Math.sin(phase);
+    const rx = radius * wobble;
+    const ry = radius * flatten * (1 + 0.025 * Math.cos(phase * 0.9));
+
+    // Dark lower edge: gives the ripple a raised, 3D meniscus-like shadow.
+    ctx.beginPath();
+    ctx.ellipse(x + 1.4, y + 2.0, rx, ry, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(18, 80, 104, ${alpha * 0.46})`;
+    ctx.lineWidth = lineWidth * 1.16;
+    ctx.stroke();
+
+    // Bright upper edge: specular highlight from the water surface.
+    ctx.beginPath();
+    ctx.ellipse(x - 1.0, y - 1.6, rx * 0.997, ry * 0.997, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(236, 253, 255, ${alpha})`;
+    ctx.lineWidth = lineWidth;
+    ctx.stroke();
+  }
+
+  function drawWater(now) {
+    ctx.clearRect(0, 0, width, height);
+
+    const liveRipples = [];
+
+    // Subtle background shimmer, visible mostly while a ripple is active.
+    const activeEnergy = Math.min(1, ripples.length / 3);
+    if (activeEnergy > 0) {
+      ctx.save();
+      ctx.globalAlpha = 0.07 * activeEnergy;
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(255,255,255,0.42)";
+      for (let i = -1; i < 5; i += 1) {
+        const y = (height * (i + 1)) / 5 + Math.sin(now * 0.0012 + i) * 7;
+        ctx.beginPath();
+        for (let x = -20; x <= width + 20; x += 32) {
+          const yy = y + Math.sin(x * 0.018 + now * 0.002 + i) * 5;
+          if (x === -20) ctx.moveTo(x, yy);
+          else ctx.lineTo(x, yy);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    for (const ripple of ripples) {
+      const age = (now - ripple.start) / 1000;
+      const duration = 4.2;
+      if (age >= duration) continue;
+
+      liveRipples.push(ripple);
+
+      const progress = age / duration;
+      const fade = Math.pow(1 - progress, 1.9);
+      const easeOut = 1 - Math.pow(1 - progress, 2.6);
+      const baseRadius = easeOut * Math.max(width, height) * 0.82;
+
+      // Perspective: waves near the top look more compressed than near the bottom.
+      const perspective = 0.28 + 0.34 * (ripple.y / Math.max(height, 1));
+      const flatten = Math.min(0.68, perspective);
+
+      // Main rings. The multiple phase-shifted rings mimic capillary waves.
+      for (let ring = 0; ring < 7; ring += 1) {
+        const radius = baseRadius - ring * 32 - 18 * Math.sin(age * 5.5 + ring);
+        const ringFade = Math.max(0, 1 - ring / 7);
+        const alpha = 0.25 * ripple.strength * fade * ringFade;
+        const lineWidth = 1.2 + ring * 0.34 + fade * 1.6;
+        drawEllipseStroke(
+          ripple.x,
+          ripple.y,
+          radius,
+          flatten,
+          alpha,
+          lineWidth,
+          age * 7 + ripple.seed + ring
+        );
+      }
+
+      // Soft central lens: this makes the click point look like a small depression
+      // and subtly changes the contrast of text below it.
+      const lensRadius = 44 + progress * 210;
+      const gradient = ctx.createRadialGradient(
+        ripple.x,
+        ripple.y,
+        0,
+        ripple.x,
+        ripple.y,
+        lensRadius
+      );
+      gradient.addColorStop(0, `rgba(255,255,255,${0.10 * fade})`);
+      gradient.addColorStop(0.45, `rgba(104,196,227,${0.045 * fade})`);
+      gradient.addColorStop(1, "rgba(104,196,227,0)");
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.ellipse(ripple.x, ripple.y, lensRadius, lensRadius * flatten, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ripples.length = 0;
+    ripples.push(...liveRipples);
+
+    if (ripples.length > 0) {
+      animationId = requestAnimationFrame(drawWater);
+    } else {
+      quietFrames += 1;
+      if (quietFrames > 2) {
+        waterCanvas.classList.remove("is-waving");
+        animationId = null;
+      } else {
+        animationId = requestAnimationFrame(drawWater);
+      }
+    }
+  }
+
+  resizeWaterCanvas();
+  window.addEventListener("resize", resizeWaterCanvas);
+
+  document.addEventListener("pointerdown", (event) => {
+    // Ignore non-primary clicks such as right-clicks.
+    if (event.button !== undefined && event.button !== 0) return;
+    addWaterRipple(event.clientX, event.clientY, 1);
+  });
 }
-
-document.addEventListener("click", createRipple);
