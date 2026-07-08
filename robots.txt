@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://yuitakai.github.io/yuitakai/sitemap.xml
