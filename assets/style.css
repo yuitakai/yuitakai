@@ -449,3 +449,19 @@ h3 {
 @media (prefers-reduced-motion: reduce) {
   .water-refraction { display: none; }
 }
+
+.contact-message {
+  margin-bottom: 1.1rem;
+}
+
+.contact-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.contact-links a {
+  display: inline-flex;
+  align-items: center;
+}
